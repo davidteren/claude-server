@@ -10,16 +10,33 @@ import {
 import fs from 'fs/promises';
 import path from 'path';
 
-interface Context {
+interface BaseContext {
   id: string;
   content: string;
   timestamp: string;
   tags?: string[];
+  metadata?: Record<string, unknown>;
 }
+
+interface ProjectContext extends BaseContext {
+  projectId: string;
+  parentContextId?: string;
+  references?: string[];
+}
+
+interface ConversationContext extends BaseContext {
+  sessionId: string;
+  continuationOf?: string;
+}
+
+type Context = ProjectContext | ConversationContext;
 
 class ClaudeServer {
   private server: Server;
-  private contextDir: string;
+  private baseDir: string;
+  private contextsDir: string;
+  private projectsDir: string;
+  private indexFile: string;
 
   constructor() {
     this.server = new Server(
@@ -34,8 +51,11 @@ class ClaudeServer {
       }
     );
 
-    // Store contexts in user's Documents directory
-    this.contextDir = path.join(process.env.HOME || '~', 'Documents', 'Claude', 'contexts');
+    // Use .claude directory in home for better organization
+    this.baseDir = path.join(process.env.HOME || '~', '.claude');
+    this.contextsDir = path.join(this.baseDir, 'contexts');
+    this.projectsDir = path.join(this.baseDir, 'projects');
+    this.indexFile = path.join(this.baseDir, 'context-index.json');
     
     this.setupToolHandlers();
     
@@ -47,26 +67,54 @@ class ClaudeServer {
     });
   }
 
-  private async ensureContextDir() {
-    await fs.mkdir(this.contextDir, { recursive: true });
+  private async ensureDirectories() {
+    await fs.mkdir(this.contextsDir, { recursive: true });
+    await fs.mkdir(this.projectsDir, { recursive: true });
+  }
+
+  private async getContextPath(id: string, projectId?: string): Promise<string> {
+    if (projectId) {
+      const projectDir = path.join(this.projectsDir, projectId);
+      await fs.mkdir(projectDir, { recursive: true });
+      return path.join(projectDir, `${id}.json`);
+    }
+    return path.join(this.contextsDir, `${id}.json`);
+  }
+
+  private async updateIndex(context: Context) {
+    try {
+      const indexData = await fs.readFile(this.indexFile, 'utf-8')
+        .then(data => JSON.parse(data))
+        .catch(() => ({ contexts: [] }));
+
+      const existingIndex = indexData.contexts.findIndex((c: Context) => c.id === context.id);
+      if (existingIndex >= 0) {
+        indexData.contexts[existingIndex] = context;
+      } else {
+        indexData.contexts.push(context);
+      }
+
+      await fs.writeFile(this.indexFile, JSON.stringify(indexData, null, 2), 'utf-8');
+    } catch (error) {
+      console.error('Error updating index:', error);
+    }
   }
 
   private async saveContext(context: Context) {
-    await this.ensureContextDir();
-    const filename = `${context.id}.json`;
-    await fs.writeFile(
-      path.join(this.contextDir, filename),
-      JSON.stringify(context, null, 2),
-      'utf-8'
+    await this.ensureDirectories();
+    const contextPath = await this.getContextPath(
+      context.id,
+      'projectId' in context ? context.projectId : undefined
     );
+    
+    await fs.writeFile(contextPath, JSON.stringify(context, null, 2), 'utf-8');
+    await this.updateIndex(context);
   }
 
-  private async getContext(id: string): Promise<Context | null> {
+  private async getContext(id: string, projectId?: string): Promise<Context | null> {
     try {
-      const data = await fs.readFile(
-        path.join(this.contextDir, `${id}.json`),
-        'utf-8'
-      );
+      const contextPath = await this.getContextPath(id, projectId);
+      const data = await fs.readFile(contextPath, 'utf-8');
       return JSON.parse(data);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -76,18 +124,46 @@ class ClaudeServer {
     }
   }
 
-  private async listContexts(): Promise<Context[]> {
-    await this.ensureContextDir();
-    const files = await fs.readdir(this.contextDir);
-    const contexts: Context[] = [];
+  private async listContexts(options: {
+    projectId?: string;
+    tag?: string;
+    type?: 'project' | 'conversation';
+  } = {}): Promise<Context[]> {
+    await this.ensureDirectories();
     
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const data = await fs.readFile(path.join(this.contextDir, file), 'utf-8');
-        contexts.push(JSON.parse(data));
+    const getContextsFromDir = async (dir: string): Promise<Context[]> => {
+      const files = await fs.readdir(dir);
+      const contexts: Context[] = [];
+      
+      for (const file of files) {
+        if (file.endsWith('.json')) {
+          const data = await fs.readFile(path.join(dir, file), 'utf-8');
+          contexts.push(JSON.parse(data));
+        }
       }
-    }
+      
+      return contexts;
+    };
+
+    let contexts: Context[] = [];
     
+    if (options.projectId) {
+      const projectDir = path.join(this.projectsDir, options.projectId);
+      contexts = await getContextsFromDir(projectDir);
+    } else if (options.type === 'project') {
+      contexts = await getContextsFromDir(this.projectsDir);
+    } else if (options.type === 'conversation') {
+      contexts = await getContextsFromDir(this.contextsDir);
+    } else {
+      const projectContexts = await getContextsFromDir(this.projectsDir);
+      const conversationContexts = await getContextsFromDir(this.contextsDir);
+      contexts = [...projectContexts, ...conversationContexts];
+    }
+
+    if (options.tag) {
+      contexts = contexts.filter(ctx => ctx.tags?.includes(options.tag!));
+    }
+
     return contexts.sort((a, b) => 
       new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
@@ -97,8 +173,8 @@ class ClaudeServer {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
-          name: 'save_context',
-          description: 'Save conversation context for future reference',
+          name: 'save_project_context',
+          description: 'Save project-specific context with relationships',
           inputSchema: {
             type: 'object',
             properties: {
@@ -106,22 +182,74 @@ class ClaudeServer {
                 type: 'string',
                 description: 'Unique identifier for the context',
               },
+              projectId: {
+                type: 'string',
+                description: 'Project identifier',
+              },
               content: {
                 type: 'string',
                 description: 'Context content to save',
               },
+              parentContextId: {
+                type: 'string',
+                description: 'Optional ID of parent context',
+              },
+              references: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional related context IDs',
+              },
               tags: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Optional tags for categorizing the context',
+                description: 'Optional tags for categorizing',
+              },
+              metadata: {
+                type: 'object',
+                description: 'Optional additional metadata',
               },
             },
-            required: ['id', 'content'],
+            required: ['id', 'projectId', 'content'],
+          },
+        },
+        {
+          name: 'save_conversation_context',
+          description: 'Save conversation context with continuation support',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: 'Unique identifier for the context',
+              },
+              sessionId: {
+                type: 'string',
+                description: 'Conversation session identifier',
+              },
+              content: {
+                type: 'string',
+                description: 'Context content to save',
+              },
+              continuationOf: {
+                type: 'string',
+                description: 'Optional ID of previous context',
+              },
+              tags: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional tags for categorizing',
+              },
+              metadata: {
+                type: 'object',
+                description: 'Optional additional metadata',
+              },
+            },
+            required: ['id', 'sessionId', 'content'],
           },
         },
         {
           name: 'get_context',
-          description: 'Retrieve previously saved context by ID',
+          description: 'Retrieve context by ID and optional project ID',
           inputSchema: {
             type: 'object',
             properties: {
@@ -129,19 +257,32 @@ class ClaudeServer {
                 type: 'string',
                 description: 'ID of the context to retrieve',
               },
+              projectId: {
+                type: 'string',
+                description: 'Optional project ID for project contexts',
+              },
             },
             required: ['id'],
           },
         },
         {
           name: 'list_contexts',
-          description: 'List all saved contexts',
+          description: 'List contexts with filtering options',
           inputSchema: {
             type: 'object',
             properties: {
+              projectId: {
+                type: 'string',
+                description: 'Optional project ID to filter by',
+              },
               tag: {
                 type: 'string',
-                description: 'Optional tag to filter contexts',
+                description: 'Optional tag to filter by',
+              },
+              type: {
+                type: 'string',
+                enum: ['project', 'conversation'],
+                description: 'Optional type to filter by',
               },
             },
           },
@@ -151,18 +292,34 @@ class ClaudeServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       switch (request.params.name) {
-        case 'save_context': {
-          const { id, content, tags } = request.params.arguments as {
+        case 'save_project_context': {
+          const {
+            id,
+            projectId,
+            content,
+            parentContextId,
+            references,
+            tags,
+            metadata,
+          } = request.params.arguments as {
             id: string;
+            projectId: string;
             content: string;
+            parentContextId?: string;
+            references?: string[];
             tags?: string[];
+            metadata?: Record<string, unknown>;
           };
 
-          const context: Context = {
+          const context: ProjectContext = {
             id,
+            projectId,
             content,
             timestamp: new Date().toISOString(),
+            parentContextId,
+            references,
             tags,
+            metadata,
           };
 
           await this.saveContext(context);
@@ -170,15 +327,57 @@ class ClaudeServer {
             content: [
               {
                 type: 'text',
-                text: `Context saved with ID: ${id}`,
+                text: `Project context saved with ID: ${id}`,
+              },
+            ],
+          };
+        }
+
+        case 'save_conversation_context': {
+          const {
+            id,
+            sessionId,
+            content,
+            continuationOf,
+            tags,
+            metadata,
+          } = request.params.arguments as {
+            id: string;
+            sessionId: string;
+            content: string;
+            continuationOf?: string;
+            tags?: string[];
+            metadata?: Record<string, unknown>;
+          };
+
+          const context: ConversationContext = {
+            id,
+            sessionId,
+            content,
+            timestamp: new Date().toISOString(),
+            continuationOf,
+            tags,
+            metadata,
+          };
+
+          await this.saveContext(context);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Conversation context saved with ID: ${id}`,
               },
             ],
           };
         }
 
         case 'get_context': {
-          const { id } = request.params.arguments as { id: string };
-          const context = await this.getContext(id);
+          const { id, projectId } = request.params.arguments as {
+            id: string;
+            projectId?: string;
+          };
+          
+          const context = await this.getContext(id, projectId);
 
           if (!context) {
             throw new McpError(
@@ -198,14 +397,13 @@ class ClaudeServer {
         }
 
         case 'list_contexts': {
-          const { tag } = request.params.arguments as { tag?: string };
-          let contexts = await this.listContexts();
+          const { projectId, tag, type } = request.params.arguments as {
+            projectId?: string;
+            tag?: string;
+            type?: 'project' | 'conversation';
+          };
 
-          if (tag) {
-            contexts = contexts.filter(
-              (ctx) => ctx.tags?.includes(tag)
-            );
-          }
+          const contexts = await this.listContexts({ projectId, tag, type });
 
           return {
             content: [

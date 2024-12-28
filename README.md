@@ -1,152 +1,141 @@
 # Claude Server MCP
 
-An MCP server that provides context management capabilities for Claude, allowing you to save, retrieve, and organize conversation contexts across sessions.
+A Model Context Protocol (MCP) server that provides sophisticated context management capabilities for Claude, enabling persistent context across sessions, project-specific context organization, and conversation continuity.
 
 ## Features
 
-- Save conversation contexts with optional tags
-- Retrieve previously saved contexts by ID
-- List and filter contexts by tags
-- Automatic timestamp-based organization
-- JSON-based storage for easy access and backup
+- **Project Context Management**
+  - Hierarchical context organization
+  - Parent-child relationships
+  - Cross-referencing between contexts
+  - Project-specific metadata
+
+- **Conversation Continuity**
+  - Session-based context tracking
+  - Conversation chaining
+  - Metadata-rich context storage
+  - Flexible tagging system
+
+- **Efficient Storage**
+  - Organized directory structure
+  - JSON-based storage
+  - Quick lookup indexing
+  - Asynchronous operations
 
 ## Installation
 
-The server is automatically configured in your Claude desktop app's MCP settings. Contexts are stored in `~/Documents/Claude/contexts/` by default.
+The server is automatically configured in your Claude desktop app's MCP settings. All contexts are stored in `~/.claude/` for better organization:
+
+```
+~/.claude/
+├── contexts/           # General conversation contexts
+├── projects/          # Project-specific contexts
+└── context-index.json # Quick lookup index
+```
 
 ## Tools
 
-### save_context
-
-Save a conversation context for future reference.
+### Project Context Management
 
 ```typescript
-{
-  name: 'save_context',
-  description: 'Save conversation context for future reference',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      id: {
-        type: 'string',
-        description: 'Unique identifier for the context',
-      },
-      content: {
-        type: 'string',
-        description: 'Context content to save',
-      },
-      tags: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Optional tags for categorizing the context',
-      },
-    },
-    required: ['id', 'content'],
-  },
-}
-```
-
-Example usage:
-```typescript
+// Save project context
 use_mcp_tool({
   server_name: "claude-server",
-  tool_name: "save_context",
+  tool_name: "save_project_context",
   arguments: {
-    id: "project-123",
-    content: "Discussion about implementing feature X",
-    tags: ["project", "feature-discussion"]
+    id: "feature-design-v1",
+    projectId: "my-project",
+    content: "Design discussion...",
+    parentContextId: "requirements-v1",
+    references: ["api-spec-v1"],
+    tags: ["design"],
+    metadata: { status: "in-progress" }
   }
 });
 ```
 
-### get_context
-
-Retrieve a previously saved context by its ID.
+### Conversation Management
 
 ```typescript
-{
-  name: 'get_context',
-  description: 'Retrieve previously saved context by ID',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      id: {
-        type: 'string',
-        description: 'ID of the context to retrieve',
-      },
-    },
-    required: ['id'],
-  },
-}
+// Save conversation context
+use_mcp_tool({
+  server_name: "claude-server",
+  tool_name: "save_conversation_context",
+  arguments: {
+    id: "chat-2024-01-01",
+    sessionId: "session-123",
+    content: "Discussion content...",
+    continuationOf: "previous-chat-id",
+    tags: ["meeting"]
+  }
+});
 ```
 
-Example usage:
+### Context Retrieval
+
 ```typescript
+// Get context
 use_mcp_tool({
   server_name: "claude-server",
   tool_name: "get_context",
   arguments: {
-    id: "project-123"
+    id: "feature-design-v1",
+    projectId: "my-project"
   }
 });
-```
 
-### list_contexts
-
-List all saved contexts, optionally filtered by tag.
-
-```typescript
-{
-  name: 'list_contexts',
-  description: 'List all saved contexts',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      tag: {
-        type: 'string',
-        description: 'Optional tag to filter contexts',
-      },
-    },
-  },
-}
-```
-
-Example usage:
-```typescript
+// List contexts
 use_mcp_tool({
   server_name: "claude-server",
   tool_name: "list_contexts",
   arguments: {
-    tag: "project"  // Optional
+    projectId: "my-project",
+    tag: "design",
+    type: "project"
   }
 });
 ```
 
-## Storage
+## Documentation
 
-Contexts are stored as JSON files in `~/Documents/Claude/contexts/` with the following structure:
-
-```typescript
-interface Context {
-  id: string;        // Unique identifier
-  content: string;   // Context content
-  timestamp: string; // ISO timestamp
-  tags?: string[];   // Optional categorization tags
-}
-```
-
-Each context is saved in a separate file named `{id}.json` for easy management and backup.
+- [Context Management Guide](docs/CONTEXT_MANAGEMENT.md) - Detailed guide on context types and usage
+- [Architecture Overview](docs/ARCHITECTURE.md) - Technical implementation details
+- [Usage Guide](docs/USAGE.md) - General usage instructions
+- [Claude Desktop Integration](docs/CLAUDE_DESKTOP_INTEGRATION.md) - Integration with Claude Desktop
 
 ## Development
 
-To modify or extend the server:
-
 1. Clone the repository
-2. Install dependencies: `npm install`
-3. Make changes to `src/index.ts`
-4. Build: `npm run build`
-5. The server will be built to `build/index.js`
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Build the server:
+   ```bash
+   npm run build
+   ```
+4. The server will be built to `build/index.js`
+
+## Configuration
+
+The server is configured through the Claude desktop app's configuration file at:
+`~/Library/Application Support/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "claude-server": {
+      "command": "node",
+      "args": ["/path/to/claude-server/build/index.js"]
+    }
+  }
+}
+```
 
 ## Contributing
 
-Feel free to submit issues and enhancement requests!
+Contributions are welcome! Please feel free to submit issues and pull requests.
+
+## License
+
+MIT
