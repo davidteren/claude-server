@@ -1,0 +1,13 @@
+{
+  "name": "claude-server",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}
