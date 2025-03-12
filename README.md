@@ -2,6 +2,10 @@
 
 A Model Context Protocol (MCP) server that provides sophisticated context management capabilities for Claude, enabling persistent context across sessions, project-specific context organization, and conversation continuity.
 
+<a href="https://glama.ai/mcp/servers/l6ds8v5rox">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/l6ds8v5rox/badge" alt="Claude Server MCP server" />
+</a>
+
 ## Features
 
 - **Project Context Management**
