@@ -1,5 +1,7 @@
 # Claude Server MCP
 
+[![smithery badge](https://smithery.ai/badge/@davidteren/claude-server)](https://smithery.ai/server/@davidteren/claude-server)
+
 > ⚠️ **IMPORTANT: Project Status** ⚠️
 > 
 > This project is in early development (v0.1.0) and is **NOT READY FOR PRODUCTION USE**. It is currently undergoing a significant rewrite to address several critical issues. Please check the [Issues](https://github.com/davidteren/claude-server/issues) page for current limitations and planned improvements.
@@ -48,6 +50,14 @@ For a more detailed roadmap, see our [Comprehensive Analysis](https://github.com
   - Asynchronous operations
 
 ## Installation
+
+### Installing via Smithery
+
+To install Claude Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@davidteren/claude-server):
+
+```bash
+npx -y @smithery/cli install @davidteren/claude-server --client claude
+```
 
 The server is automatically configured in your Claude desktop app's MCP settings. All contexts are stored in `~/.claude/` for better organization:
 
